@@ -21,6 +21,7 @@ namespace eval workflow::case::action::fsm {}
 
 ad_proc -private workflow::case::insert {
     {-workflow_id:required}
+    {-case_id {}}
     {-object_id:required}
 } {
     Internal procedure that creates a new workflow case in the
@@ -37,7 +38,9 @@ ad_proc -private workflow::case::insert {
     @author Lars Pind (lars@collaboraid.biz)
 } {
     db_transaction {
-        set case_id [db_nextval "workflow_cases_seq"]
+	if { ![exists_and_not_null case_id] } {
+	    set case_id [db_nextval "workflow_cases_seq"]
+	}
         
         # Create the case
         db_dml insert_case {}
@@ -52,11 +55,14 @@ ad_proc -private workflow::case::insert {
 ad_proc -public workflow::case::new {
     {-no_notification:boolean}
     -workflow_id:required
+    {-case_id {}}
     {-object_id {}}
     {-comment {}}
     {-comment_mime_type {}}
     -user_id
     -assignment
+    -package_id
+    {-initial_action_id ""}
 } {
     Start a new case for this workflow and object.
 
@@ -76,11 +82,24 @@ ad_proc -public workflow::case::new {
     if { ![exists_and_not_null user_id] } {
         set user_id [ad_conn user_id]
     }
+
+    if { ![exists_and_not_null package_id] } {
+        set package_id [ad_conn package_id]
+    }
     
     db_transaction {
 
         # Initial action
-        set initial_action_id [workflow::get_element -workflow_id $workflow_id -element initial_action_id]
+	if {0} {
+	    # get initial action not from cache
+	    array set row [workflow::get_not_cached -workflow_id $workflow_id]
+	    set initial_action_id $row(initial_action_id)
+	    array unset row
+	}
+
+	if {[empty_string_p $initial_action_id]} {
+	    set initial_action_id [workflow::get_element -workflow_id $workflow_id -element initial_action_id]
+	}
 
         if { [empty_string_p $initial_action_id] } {
             # If there is no initial-action, we create one now
@@ -122,6 +141,7 @@ ad_proc -public workflow::case::new {
         # Insert the case
         set case_id [insert \
                          -workflow_id $workflow_id \
+                         -case_id $case_id \
                          -object_id $object_id]
 
         # Assign roles
@@ -139,6 +159,7 @@ ad_proc -public workflow::case::new {
             -comment $comment \
             -comment_mime_type $comment_mime_type \
             -user_id $user_id \
+            -package_id $package_id \
             -initial
     }
         
@@ -1040,17 +1061,24 @@ ad_proc -public workflow::case::role::add_assignee_widgets {
     {-case_id:required}
     {-form_name:required}
     {-prefix "role_"}
+    {-role_ids {}}
 } {
     Get the assignee widget for use with ad_form for this role.
 
     @param case_id the ID of the case.
     @param role_id the ID of the role.
+    @param role_ids Only add assignee widgets for the roles supplied. If no roles are
+                    specified then all roles are used.
 
     @author Lars Pind (lars@collaboraid.biz)
 } {
     set workflow_id [workflow::case::get_element -case_id $case_id -element workflow_id]
-    set roles [list]
-    foreach role_id [workflow::get_roles -workflow_id $workflow_id] {
+
+    if { [empty_string_p $role_ids] } {
+        set role_ids [workflow::get_roles -workflow_id $workflow_id]
+    }
+
+    foreach role_id $role_ids {
         ad_form -extend -name $form_name -form [list [get_assignee_widget -case_id $case_id -role_id $role_id -prefix $prefix]]
     }
 }
@@ -1619,6 +1647,7 @@ ad_proc -public workflow::case::action::do_side_effects {
 
     # Invoke them
     foreach impl_name $impl_names {
+
         acs_sc::invoke \
                 -contract $contract_name \
                 -operation "DoSideEffect" \
@@ -1648,7 +1677,7 @@ ad_proc -public workflow::case::action::notify {
     set hr [string repeat "=" 70]
     
     # TODO: Get activity log for top-case
-    array set latest_action [lindex [workflow::case::get_activity_log_info -case_id $case_id] end]
+    array set latest_action [lindex [workflow::case::get_activity_log_info_not_cached -case_id $case_id] end]
 
     # Variables used by I18N messages:
     set action_past_tense "$latest_action(action_pretty_past_tense)[ad_decode $latest_action(log_title) "" "" " $latest_action(log_title)"]"
@@ -1697,7 +1726,7 @@ ad_proc -public workflow::case::action::notify {
 
     # Roles and their current assignees
     foreach role_id [workflow::get_roles -workflow_id $case(workflow_id)] {
-        set label [workflow::role::get_element -role_id $role_id -element pretty_name]
+        set label [lang::util::localize [workflow::role::get_element -role_id $role_id -element pretty_name]]
         foreach assignee_arraylist [workflow::case::role::get_assignees -case_id $case_id -role_id $role_id] {
             array set assignee $assignee_arraylist
             lappend object_details_list $label "$assignee(name) ($assignee(email))"
@@ -1732,8 +1761,15 @@ ad_proc -public workflow::case::action::notify {
     # This takes deputies into account
 
 #XXXXX Verify this ... probably wrong
-    set assignee_list [db_list enabled_action_assignees {}]
-
+    set assigned_role_id [workflow::action::get_assigned_role -action_id $action_id]
+    set assignee_list [list]
+    foreach assignee_array [workflow::case::role::get_assignees \
+                          -case_id $case_id \
+                          -role_id $assigned_role_id] {
+        array set ass $assignee_array
+        lappend assignee_list $ass(party_id)
+    }
+        
     # List of users who play some role in this case
     # This takes deputies into account
     set case_player_list [db_list case_players {}]
@@ -1788,25 +1824,24 @@ $hr
     foreach type { 
         workflow_assignee workflow_my_cases workflow_case workflow
     } {
-        set object_id [workflow::case::get_notification_object \
-                -type $type \
-                -workflow_id $case(workflow_id) \
-                -case_id $case_id]
+            set object_id [workflow::case::get_notification_object \
+                               -type $type \
+                               -workflow_id $case(workflow_id) \
+                               -case_id $case_id]
 
-        if { ![empty_string_p $object_id] } {
-
-            set notified_list [concat $notified_list [notification::new \
-                    -type_id [notification::type::get_type_id -short_name $type] \
-                    -object_id $object_id \
-                    -action_id $entry_id \
-                    -response_id $case(object_id) \
-                    -notif_subject $subject($type) \
-                    -notif_text $body($type) \
-                    -already_notified $notified_list \
-                    -subset $subset($type) \
-                    -return_notified]]
+        if { ![empty_string_p $object_id] && ($type eq "workflow" || ![empty_string_p $subset($type)] || $type eq "workflow_case")} {
+                set notified_list [concat $notified_list [notification::new \
+                                                              -type_id [notification::type::get_type_id -short_name $type] \
+                                                              -object_id $object_id \
+                                                              -action_id $entry_id \
+                                                              -response_id $case(object_id) \
+                                                              -notif_subject $subject($type) \
+                                                              -notif_text $body($type) \
+                                                              -already_notified $notified_list \
+                                                              -subset $subset($type) \
+                                                              -return_notified]]
+            }
         }
-    }
 }
 
 
@@ -1830,6 +1865,7 @@ $hr
 ad_proc -public workflow::case::action::execute {
     {-no_notification:boolean}
     {-no_perm_check:boolean}
+    {-no_logging:boolean}
     {-enabled_action_id {}}
     {-case_id {}}
     {-action_id {}}
@@ -1839,6 +1875,7 @@ ad_proc -public workflow::case::action::execute {
     {-user_id}
     {-initial:boolean}
     {-entry_id {}}
+    {-package_id}
 } {
     Execute the action. Either provide (case_id, action_id, parent_enabled_action_id), or simply enabled_action_id.
 
@@ -1863,6 +1900,10 @@ ad_proc -public workflow::case::action::execute {
 
     @param no_perm_check      Set this switch if you do not want any permissions chcecking, e.g. for automatic actions.
 
+    @param no_perm_check      Set this switch if you do not want to have any workflow_case loggings.
+
+    @param package_id         The package_id the case object belongs to. This is optional but is useful if the case objects are not CR items.
+
     @return entry_id of the new log entry (will be a cr_item).
 
     @author Lars Pind (lars@collaboraid.biz)
@@ -1872,6 +1913,14 @@ ad_proc -public workflow::case::action::execute {
             set user_id 0
         } else {
             set user_id [ad_conn user_id]
+        }
+    }
+
+    if { ![exists_and_not_null package_id] } {
+        if { ![ad_conn isconnected] } {
+            set package_id {}
+        } else {
+            set package_id [ad_conn package_id]
         }
     }
 
@@ -1950,13 +1999,15 @@ ad_proc -public workflow::case::action::execute {
         set extra_vars [ns_set create]
         oacs_util::vars_to_ns_set \
                 -ns_set $extra_vars \
-                -var_list { entry_id case_id action_id comment comment_mime_type }
-        
-        set entry_id [package_instantiate_object \
-                -creation_user $user_id \
-                -extra_vars $extra_vars \
-                -package_name "workflow_case_log_entry" \
-                "workflow_case_log_entry"]
+                -var_list { entry_id case_id action_id comment comment_mime_type package_id}
+
+        if {!$no_logging_p} {
+	    set entry_id [package_instantiate_object \
+			      -creation_user $user_id \
+			      -extra_vars $extra_vars \
+			      -package_name "workflow_case_log_entry" \
+			      "workflow_case_log_entry"]
+	}
 
         # Fire side-effects
         workflow::case::action::do_side_effects \
@@ -1964,6 +2015,14 @@ ad_proc -public workflow::case::action::execute {
                 -action_id $action_id \
                 -entry_id $entry_id
         
+        # Scan for enabled actions
+        if { [string equal $parent_trigger_type "workflow"] } {
+            workflow::case::state_changed_handler \
+                -case_id $case_id \
+                -parent_enabled_action_id $parent_enabled_action_id \
+                -user_id $user_id
+        }
+
         # Notifications
         if { !$no_notification_p } {
             workflow::case::action::notify \
@@ -1974,14 +2033,6 @@ ad_proc -public workflow::case::action::execute {
                 -comment_mime_type $comment_mime_type
         }
         
-        # Scan for enabled actions
-        if { [string equal $parent_trigger_type "workflow"] } {
-            workflow::case::state_changed_handler \
-                -case_id $case_id \
-                -parent_enabled_action_id $parent_enabled_action_id \
-                -user_id $user_id
-        }
-
         # If there's a parent, alert the parent
         if { ![empty_string_p $parent_enabled_action_id] } {
             workflow::case::child_state_changed_handler \
@@ -2191,7 +2242,6 @@ ad_proc -private workflow::case::action::enable {
             }
         }
 
-
         switch $action(trigger_type) {
             "workflow" {
                 # Find and execute child init action
@@ -2221,13 +2271,7 @@ ad_proc -private workflow::case::action::enable {
             }
             "parallel" {
                 # Find and enable child actions
-                # TODO: Move this to action::get
-                set child_actions [db_list child_actions { 
-                    select action_id
-                    from   workflow_actions
-                    where  parent_action_id = :action_id
-                }]
-                foreach child_action_id $child_actions {
+                foreach child_action_id $action(child_action_ids) {
                     workflow::case::action::enable \
                         -case_id $case_id \
                         -action_id $child_action_id \
@@ -2237,29 +2281,22 @@ ad_proc -private workflow::case::action::enable {
                 }
             }
             "dynamic" {
-                # HACK: just pick each user from the assigned role ...
-                # TODO: Move this to action::get
-                set child_actions [db_list child_actions { 
-                    select action_id
-                    from   workflow_actions
-                    where  parent_action_id = :action_id
-                }]
-                
-                foreach child_action_id $child_actions {
-
+                # Find and enable all child actions, once for each party assigned to the role
+                foreach child_action_id $action(child_action_ids) {
+                    
                     set child_role_id [workflow::action::get_element \
-                                        -action_id $child_action_id \
-                                        -element assigned_role_id]
-
+                                           -action_id $child_action_id \
+                                           -element assigned_role_id]
+                    
                     set parties [workflow::case::role::get_assignees \
                                      -case_id $case_id \
                                      -role_id $child_role_id]
-
-
+                    
+                    
                     foreach elm $parties {
                         array unset party 
                         array set party $elm
-
+                        
                         workflow::case::action::enable \
                             -case_id $case_id \
                             -action_id $child_action_id \

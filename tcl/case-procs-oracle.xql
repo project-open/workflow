@@ -65,7 +65,7 @@
                iou.last_name as user_last_name,
                iou.email as user_email,
                io.creation_date,
-               to_char(io.creation_date, 'fmMM/DDfm/YYYY') as creation_date_pretty,
+               to_char(io.creation_date, 'YYYY-MM-DD HH24:MI:SS') as creation_date_pretty,
                blob_to_string(r.content) as comment_string, -- needs il8-ing...
                r.mime_type as comment_mime_type,
                d.key,
@@ -74,14 +74,14 @@
                workflow_actions a,
                cr_items i,
                acs_objects io,
-               cc_users iou,
+               acs_users_all iou,
                cr_revisions r,
                workflow_case_log_data d
         where  l.case_id = :case_id
           and  l.action_id = a.action_id
           and  i.item_id = l.entry_id
           and  io.object_id = i.item_id
-          and  iou.user_id = io.creation_user
+          and  iou.user_id (+) = io.creation_user
           and  r.revision_id = i.live_revision
           and  d.entry_id (+) = l.entry_id
         order  by creation_date
