@@ -492,8 +492,7 @@ ad_proc -public workflow::state::fsm::get_workflow_id {
 
     @author Peter Marklund
 } {
-    return [util_memoize \
-            [list workflow::state::fsm::get_workflow_id_not_cached -state_id $state_id]]
+    return [util_memoize [list workflow::state::fsm::get_workflow_id_not_cached -state_id $state_id]]
 }
 
 ad_proc -public workflow::state::fsm::pretty_name_unique_p {

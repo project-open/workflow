@@ -553,8 +553,7 @@ ad_proc -public workflow::action::get_workflow_id {
 
     @author Peter Marklund
 } {
-    return [util_memoize \
-            [list workflow::action::get_workflow_id_not_cached -action_id $action_id]]
+    return [util_memoize [list workflow::action::get_workflow_id_not_cached -action_id $action_id]]
 }
 
 ad_proc -private workflow::action::get_workflow_id_not_cached {

@@ -339,8 +339,7 @@ ad_proc -public workflow::role::get_workflow_id {
 
     @author Peter Marklund
 } {
-    return [util_memoize \
-            [list workflow::role::get_workflow_id_not_cached -role_id $role_id]]
+    return [util_memoize [list workflow::role::get_workflow_id_not_cached -role_id $role_id]]
 }
 
 ad_proc -private workflow::role::get_workflow_id_not_cached {
