@@ -13,7 +13,7 @@
         <owner url="http://pinds.com">Lars Pind</owner>
         <owner url="http://petermarklund.com">Peter Marklund</owner>
         <summary>A Tcl API for creating and managing workflows.</summary>
-        <release-date>2004-01-30</release-date>
+        <release-date>2016-11-15</release-date>
         <vendor url="http://www.collaboraid.biz">Collaboraid</vendor>
         <description format="text/html">
           This package lets you define the process that your tickets, articles,
