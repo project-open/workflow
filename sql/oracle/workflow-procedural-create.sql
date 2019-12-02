@@ -182,7 +182,7 @@ as
     content_type in varchar default 'workflow_case_log_entry'
     ) return integer
   is
-    v_name                        varchar2(4000); -- XXX aufflick fix this
+    v_name                        varchar2(4000);
     v_action_short_name           varchar2(4000);
     v_action_pretty_past_tense    varchar2(4000);
     v_case_object_id              integer;
